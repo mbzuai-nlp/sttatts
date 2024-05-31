@@ -1,0 +1,416 @@
+{
+    "os": "Linux-5.15.0-1056-aws-x86_64-with-glibc2.10",
+    "python": "3.8.2",
+    "heartbeatAt": "2024-05-27T19:45:14.459719",
+    "startedAt": "2024-05-27T19:45:13.941034",
+    "docker": null,
+    "cuda": null,
+    "args": [
+        "/fsx/hyperpod-input-datasets/AROA6GBMFKRI2VWQAUGYI:Hawau.Toyin@mbzuai.ac.ae/sttatts_en",
+        "--save-dir",
+        "/fsx/hyperpod-input-datasets/AROA6GBMFKRI2VWQAUGYI:Hawau.Toyin@mbzuai.ac.ae/results/sttatts/models_english_150K_t5_new/",
+        "--train-subset",
+        "train-clean-100|train-clean-360",
+        "--valid-subset",
+        "dev-clean|dev-clean",
+        "--asr-dir",
+        "/fsx/hyperpod-input-datasets/AROA6GBMFKRI2VWQAUGYI:Hawau.Toyin@mbzuai.ac.ae/librispeech_cleaned_manifest",
+        "--tts-dir",
+        "/fsx/hyperpod-input-datasets/AROA6GBMFKRI2VWQAUGYI:Hawau.Toyin@mbzuai.ac.ae/libritts_cleaned_manifest",
+        "--distributed-world-size",
+        "2",
+        "--distributed-port",
+        "0",
+        "--ddp-backend",
+        "legacy_ddp",
+        "--user-dir",
+        "/fsx/hyperpod-input-datasets/AROA6GBMFKRI2VWQAUGYI:Hawau.Toyin@mbzuai.ac.ae/t5/artst",
+        "--log-format",
+        "json",
+        "--batch-ratio",
+        "[0.5,0.5]",
+        "--sample-ratios",
+        "[0.5,0.5]",
+        "--seed",
+        "1",
+        "--fp16",
+        "--task",
+        "artst",
+        "--t5-task",
+        "multitask",
+        "--sample-rate",
+        "16000",
+        "--num-workers",
+        "4",
+        "--max-tokens",
+        "3200000",
+        "--update-freq",
+        "4",
+        "--bpe-tokenizer",
+        "/fsx/hyperpod-input-datasets/AROA6GBMFKRI2VWQAUGYI:Hawau.Toyin@mbzuai.ac.ae/sttatts_en/spm_char.model",
+        "--criterion",
+        "artst",
+        "--report-accuracy",
+        "--use-guided-attn-loss",
+        "--zero-infinity",
+        "--ce-weight",
+        "0.5",
+        "--ctc-weight",
+        "0.5",
+        "--optimizer",
+        "adam",
+        "--adam-betas",
+        "(0.9, 0.98)",
+        "--adam-eps",
+        "1e-08",
+        "--weight-decay",
+        "0.1",
+        "--lr",
+        "0.0001",
+        "--lr-scheduler",
+        "tri_stage",
+        "--phase-ratio",
+        "[0.25, 0.4, 0.35]",
+        "--final-lr-scale",
+        "0.05",
+        "--clip-norm",
+        "25",
+        "--sentence-avg",
+        "--max-update",
+        "150000",
+        "--max-text-positions",
+        "600",
+        "--min-speech-sample-size",
+        "1056",
+        "--max-speech-sample-size",
+        "480256",
+        "--max-speech-positions",
+        "1876",
+        "--required-batch-size-multiple",
+        "1",
+        "--save-interval-updates",
+        "10000",
+        "--skip-invalid-size-inputs-valid-test",
+        "--arch",
+        "artst_transformer_base_asr",
+        "--share-input-output-embed",
+        "--find-unused-parameters",
+        "--bert-init",
+        "--relative-position-embedding",
+        "--validate-after-updates",
+        "10000",
+        "--warmup-steps",
+        "10000",
+        "--ignore-unused-valid-subsets",
+        "--validate-interval",
+        "50",
+        "--keep-last-epochs",
+        "3",
+        "--feature-grad-mult",
+        "1.0",
+        "--finetune-from-model",
+        "/fsx/hyperpod-input-datasets/AROA6GBMFKRI2VWQAUGYI:Hawau.Toyin@mbzuai.ac.ae/sttatts_en/speecht5_base.pt",
+        "--wandb-project",
+        "joint_training_en"
+    ],
+    "state": "running",
+    "program": "/fsx/homes/Hawau.Toyin@mbzuai.ac.ae/miniconda3/envs/fseq/bin/fairseq-train",
+    "codePathLocal": null,
+    "host": "gpu40-2",
+    "username": "Hawau.Toyin@mbzuai.ac.ae",
+    "executable": "/fsx/homes/Hawau.Toyin@mbzuai.ac.ae/miniconda3/envs/fseq/bin/python",
+    "cpu_count": 48,
+    "cpu_count_logical": 48,
+    "cpu_freq": {
+        "current": 3112.486208333335,
+        "min": 0.0,
+        "max": 0.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 3600.082,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 3600.054,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 3599.332,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 3599.963,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 3599.997,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 3600.002,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 3600.005,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        },
+        {
+            "current": 2999.998,
+            "min": 0.0,
+            "max": 0.0
+        }
+    ],
+    "disk": {
+        "/": {
+            "total": 96.73210144042969,
+            "used": 65.15304183959961
+        }
+    },
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "gpu_devices": [
+        {
+            "name": "NVIDIA A100-SXM4-40GB",
+            "memory_total": 42949672960
+        },
+        {
+            "name": "NVIDIA A100-SXM4-40GB",
+            "memory_total": 42949672960
+        },
+        {
+            "name": "NVIDIA A100-SXM4-40GB",
+            "memory_total": 42949672960
+        },
+        {
+            "name": "NVIDIA A100-SXM4-40GB",
+            "memory_total": 42949672960
+        },
+        {
+            "name": "NVIDIA A100-SXM4-40GB",
+            "memory_total": 42949672960
+        },
+        {
+            "name": "NVIDIA A100-SXM4-40GB",
+            "memory_total": 42949672960
+        },
+        {
+            "name": "NVIDIA A100-SXM4-40GB",
+            "memory_total": 42949672960
+        },
+        {
+            "name": "NVIDIA A100-SXM4-40GB",
+            "memory_total": 42949672960
+        }
+    ],
+    "memory": {
+        "total": 1121.8161315917969
+    }
+}

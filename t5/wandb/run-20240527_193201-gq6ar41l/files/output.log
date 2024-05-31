@@ -1,0 +1,7 @@
+2024-05-27 19:32:07 | INFO | fairseq.trainer | begin training epoch 1
+2024-05-27 19:32:07 | INFO | fairseq_cli.train | Start iterating over samples
+/fsx/homes/Hawau.Toyin@mbzuai.ac.ae/miniconda3/envs/fseq/lib/python3.8/site-packages/torch/nn/functional.py:4999: UserWarning: Support for mismatched key_padding_mask and attn_mask is deprecated. Use same type for both instead.
+  warnings.warn(
+/fsx/homes/Hawau.Toyin@mbzuai.ac.ae/miniconda3/envs/fseq/lib/python3.8/site-packages/torch/functional.py:504: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /opt/conda/conda-bld/pytorch_1682343998658/work/aten/src/ATen/native/TensorShape.cpp:3483.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+2024-05-27 19:32:48 | INFO | train_inner | {"epoch": 1, "update": 0.037, "s2t_loss": "9.958", "t2s_loss": "0.88478", "loss": "2.93561", "s2t_nll_loss": "2.622", "ctc_loss": "17.295", "ce_loss": "1.817", "s2t_accuracy": "48.208", "t2s_l1_loss": "0.7973", "t2s_l2_loss": "0.54825", "t2s_bce_loss": "0.08375", "s2t_total": "3560.13", "s2t_n_correct": "1716.28", "t2s_encoder_alpha": "0.12695", "t2s_decoder_alpha": "0.19053", "t2s_enc_dec_attn_loss": "0.00369606", "s2t_ppl": "6.16", "wps": "16586.8", "ups": "2.73", "wpb": "6069.7", "bsz": "53.4", "num_updates": "100", "lr": "1.264e-06", "gnorm": "3.187", "clip": "0", "loss_scale": "128", "train_wall": "40", "gb_free": "31.7", "wall": "56"}
