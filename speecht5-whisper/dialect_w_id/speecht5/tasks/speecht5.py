@@ -24,35 +24,35 @@ from fairseq.data import (
 )
 from fairseq.data.encoders.utils import get_whole_word_mask
 from fairseq import utils
-from artst.data.multitask_dataset import MultitaskDataset
-from artst.data.speech_to_text_dataset import SpeechToTextDataset
-from artst.data.text_to_speech_dataset import TextToSpeechDataset
-from artst.data.speech_to_speech_dataset import SpeechToSpeechDataset
-from artst.data.speech_to_class_dataset import SpeechToClassDataset
-from artst.data.speech_dataset import SpeechPretrainDataset
-from artst.data.text_dataset import TextPretrainDataset
+from speecht5.data.multitask_dataset import MultitaskDataset
+from speecht5.data.speech_to_text_dataset import SpeechToTextDataset
+from speecht5.data.text_to_speech_dataset import TextToSpeechDataset
+from speecht5.data.speech_to_speech_dataset import SpeechToSpeechDataset
+from speecht5.data.speech_to_class_dataset import SpeechToClassDataset
+from speecht5.data.speech_dataset import SpeechPretrainDataset
+from speecht5.data.text_dataset import TextPretrainDataset
 from fairseq.data.shorten_dataset import maybe_shorten_dataset
 from fairseq.tasks import LegacyFairseqTask, register_task
 from fairseq.tasks.hubert_pretraining import LabelEncoder 
 
 logger = logging.getLogger(__name__)
 
-# Thesis: added multitask task name
-TASK_NAME = ["s2t", "t2s", "s2s", "s2c", "pretrain", "multitask",]
+TASK_NAME = ["s2t", "t2s", "s2s", "s2c", "pretrain"]
 
-# class MultiTaskDictionary(Dictionary):
-#     def __init__(self, languages=['<en>','<de>'], tasks=['<translate>','<transcribe>'], *args, **kwargs):
-#         super().__init__(*args, **kwargs)
-#         self.lang_indexes = {lan:self.add_symbol(lan) for lan in languages}
-#         self.task_indexes = {tas:self.add_symbol(tas) for tas in tasks}
+DIALECTS = ["Palestine", 'Jordan', 'Lebanon', 'Kuwait', 'MSA', 'Tunisia', 
+       'Syria', 'Morocco', 'Egypt', 'SaudiArabia', 'UAE', 'Iraq',
+       'Multiple']
 
-#     def lang(self, language):
-#         return self.lang_indexes[language]
-#     def task(self, task):
-#         return self.task_indexes[task]
+class JointDialectDictionary(Dictionary):
+    def __init__(self, dialects=DIALECTS, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dialect_indexes = {dia:self.add_symbol(dia) for dia in dialects}
 
-@register_task("artst")
-class ArTSTTask(LegacyFairseqTask):
+    def dialect(self, dialect):
+        return self.dialect_indexes[dialect]
+
+@register_task("speecht5")
+class SpeechT5Task(LegacyFairseqTask):
     @staticmethod
     def add_args(parser):
         parser.add_argument("data", help="manifest root path")
@@ -63,31 +63,17 @@ class ArTSTTask(LegacyFairseqTask):
             help="Configuration YAML filename (under manifest root)",
         )
         parser.add_argument(
-            "--asr-dir",
-            type=str,
-            help="asr directory",
-        )
-        parser.add_argument(
-            "--tts-dir",
-            type=str,
-            help="tts directory",
-        )
-        parser.add_argument(
-            "--st-dir",
-            type=str,
-            help="tts directory",
-        )
-        parser.add_argument(
-            "--asr-tts-vc-only",
-            action = "store_true",
-            help = "ASR, VC and TTS tasks only"
-        )
-        parser.add_argument(
             "--max-speech-sample-size",
             default=None,
             type=int,
             metavar="N",
             help="max speech sample size",
+        )
+        parser.add_argument(
+            "--dialect",
+            default="Egypt",
+            type=str,
+            help="dialect for the task",
         )
         parser.add_argument(
             "--min-speech-sample-size",
@@ -300,12 +286,6 @@ class ArTSTTask(LegacyFairseqTask):
             default=0.0,
             help="ctc weight for inference",
         )
-        parser.add_argument(
-            "--inference-speech",
-            type=bool,
-            default=False,
-            help="inference for TTS",
-        )
 
     def __init__(self, args, dicts, config):
         super().__init__(args)
@@ -315,8 +295,7 @@ class ArTSTTask(LegacyFairseqTask):
         # Used for filter size
         if self.t5_task in ['s2t', 't2s', 's2s', 's2c']:
             self.max_pos = [self.args.max_speech_positions * 256]
-        # Thesis: changes t5_task == 'pretrain' to t5_task in ['pretrain', 'multitask']
-        elif self.t5_task in ['pretrain', 'multitask']:
+        elif self.t5_task == 'pretrain':
             self.max_pos = [self.args.max_speech_positions * 256, self.args.max_text_positions]
 
         self.mask_idx = self.dicts["text"].add_symbol("<mask>")
@@ -350,12 +329,11 @@ class ArTSTTask(LegacyFairseqTask):
             dicts["text"] = Dictionary.load(op.join(args.data, "dict.txt"))
         else:
             if config is None:
-                dicts["text"] = Dictionary.load(op.join(args.data, "dict.txt"))
-                # if args.st_dir is not None:
-                #     dicts["st"] = MultiTaskDictionary.load(op.join(args.st_dir, "dict.txt"))
+                dicts["text"] = JointDialectDictionary.load(op.join(args.data, "dict.txt"))
+                # dicts["text"] = Dictionary.load(op.join(args.data, "dict.txt"))
             else:
                 dicts["text"] = Dictionary.load(op.join(args.data, config.vocab_filename))
-                
+
         return cls(args, dicts, config)
 
     def build_criterion(self, args):
@@ -367,10 +345,12 @@ class ArTSTTask(LegacyFairseqTask):
         if self.t5_task == "s2t":
             ## For speech to text task
             bpe_tokenizer = self.build_bpe(self.args)
+            manifest = f"{self.args.data}/{split}.tsv"
             procs = [LabelEncoder(self.dicts["text"])]
-            manifest = f"{self.args.hubert_label_dir}/{split}.tsv"
             paths = [f"{self.args.hubert_label_dir}/{split}.txt"]
-           
+            # Hawau: view dataset...
+            logger.info(f"Manifest: {manifest}")
+            # logger.info(f"Paths: {paths}")
             self.datasets[split] = SpeechToTextDataset(
                 manifest,
                 sample_rate=self.args.sample_rate,
@@ -382,8 +362,6 @@ class ArTSTTask(LegacyFairseqTask):
                 store_labels=False,
                 tgt_dict=self.dicts["text"],
                 tokenizer=bpe_tokenizer,
-                language = '<de>',
-                sub_task = '<translate>',
             )
         elif self.t5_task == "t2s":
             ## For text to speech task
@@ -392,7 +370,7 @@ class ArTSTTask(LegacyFairseqTask):
             procs = [LabelEncoder(self.dicts["text"])]
             t2s_datasets = [
                 TextToSpeechDataset(
-                    manifest_path=f"{self.args.hubert_label_dir}/{name}.tsv",
+                    manifest_path=f"{self.args.data}/{name}.tsv",
                     sample_rate=self.args.sample_rate,
                     label_paths=[f"{self.args.hubert_label_dir}/{name}.txt"],
                     label_processors=procs,
@@ -402,7 +380,6 @@ class ArTSTTask(LegacyFairseqTask):
                     src_dict=self.dicts["text"],
                     tokenizer=bpe_tokenizer,
                     reduction_factor=self.args.reduction_factor,
-                    inference=self.args.inference_speech,
                 )
                 for name in split.split(",")
             ]
@@ -438,207 +415,6 @@ class ArTSTTask(LegacyFairseqTask):
                 tgt_dict=self.dicts["text"],
                 max_length=max_length
             )
-        # Thesis: defining dataloader for multitask
-        # Use asr_dir for ASR
-        # Use tts_dir for TTS
-        # Use vc_dir for VC
-        elif self.t5_task == "multitask":
-            is_train_split = ("train" in split)
-            from fairseq.data import ConcatDataset
-            finetune_datasets =[]
-            bpe_tokenizer = self.build_bpe(self.args)
-            procs = [LabelEncoder(self.dicts["text"])]
-            
-            if self.args.asr_tts_vc_only:
-                logger.info("ASR, VC, and TTS tasks only")
-                asr_split, vc_split, tts_split = split.split('|')
-                speech_label = f"{self.args.asr_dir}/{asr_split}.tsv"
-                text_label = [f"{self.args.asr_dir}/{asr_split}.txt"]
-                logger.info(f"ASR directory: {speech_label}")
-                # Hawau: ASR
-                finetune_datasets.append(
-                    SpeechToTextDataset(
-                        speech_label,
-                        sample_rate=self.args.sample_rate,
-                        label_paths=text_label,
-                        label_processors=procs,
-                        max_keep_sample_size=self.max_pos[0] if self.args.max_speech_sample_size is None else self.args.max_speech_sample_size,
-                        min_keep_sample_size=self.args.min_speech_sample_size,
-                        normalize=self.args.normalize,
-                        store_labels=False,
-                        tgt_dict=self.dicts["text"],
-                        tokenizer=bpe_tokenizer,
-                    )
-                )
-                sample_ratios.append(sum([finetune_datasets[0].size(i) for i in range(len(finetune_datasets[0]))]))
-                manifest = f"{self.args.st_dir}/{vc_split}.tsv"
-                logger.info(f"VC directory: {manifest}")
-                finetune_datasets.append(
-                    SpeechToSpeechDataset(
-                        manifest_path=manifest,
-                        sample_rate=self.args.sample_rate,
-                        max_keep_sample_size=self.max_pos[0] if self.args.max_speech_sample_size is None else self.args.max_speech_sample_size,
-                        min_keep_sample_size=self.args.min_speech_sample_size,
-                        normalize=self.args.normalize,
-                        reduction_factor=self.args.reduction_factor,
-                    ) 
-                )
-                # sample_ratios.append(sum([finetune_datasets[1].size(i) for i in range(len(finetune_datasets[1]))]))
-                sample_ratios.append(sum(finetune_datasets[1].sizes))
-                # Text to speech
-                finetune_datasets.append(
-                    TextToSpeechDataset(
-                        manifest_path=f"{self.args.tts_dir}/{tts_split}.tsv",
-                        sample_rate=self.args.sample_rate,
-                        label_paths=[f"{self.args.tts_dir}/{tts_split}.txt"],
-                        label_processors=procs,
-                        max_keep_sample_size=self.max_pos[0],
-                        normalize=self.args.normalize,
-                        store_labels=False,
-                        src_dict=self.dicts["text"],
-                        tokenizer=bpe_tokenizer,
-                        reduction_factor=self.args.reduction_factor,
-                        inference=self.args.inference_speech,
-                    )
-                )
-                
-                sample_ratios.append(sum(finetune_datasets[2].sizes))
-                print(
-                    "Task: {0}, Loaded {1} samples of ASR speech-to-text_dataset".format(
-                        'multitask',
-                        len(finetune_datasets[0]),
-                    )
-                )
-                print(
-                    "Task: {0}, Loaded {1} samples of Voice Translation speech-to-speech_dataset".format(
-                        'multitask',
-                        len(finetune_datasets[1]),
-                    )
-                )
-                print(
-                    "Task: {0}, Loaded {1} samples of first text_to_speech_dataset".format(
-                        'multitask',
-                        len(finetune_datasets[2]),
-                    )
-                )
-                if self.args.batch_ratio is not None:
-                    batch_ratio = eval(self.args.batch_ratio)
-                    assert len(batch_ratio) == len(sample_ratios)
-                    sample_ratios = [sample_ratios[i] / batch_ratio[i] for i in range(len(sample_ratios))]
-                else:
-                    batch_ratio = None
-                max_size = max(sample_ratios)
-                sample_ratios = [max_size / r for r in sample_ratios]
-                if hasattr(self.args, "sample_ratios") and self.args.sample_ratios is not None:
-                    sample_ratios = eval(self.args.sample_ratios)
-                if is_train_split:
-                    self.datasets[split] = MultitaskDataset(finetune_datasets)
-                else:
-                    from operator import itemgetter 
-                    asr_tts = [0,2]
-                    self.datasets[split] = MultitaskDataset(list((itemgetter(*asr_tts)(finetune_datasets))))
-
-            else:
-                asr_split, st_split, tts_split = split.split('|')
-                
-                speech_label = f"{self.args.asr_dir}/{asr_split}.tsv"
-                text_label = [f"{self.args.asr_dir}/{asr_split}.txt"]
-                logger.info(f"ASR directory: {speech_label}")
-                # Hawau: ASR
-                finetune_datasets.append(
-                    SpeechToTextDataset(
-                        speech_label,
-                        sample_rate=self.args.sample_rate,
-                        label_paths=text_label,
-                        label_processors=procs,
-                        max_keep_sample_size=self.max_pos[0] if self.args.max_speech_sample_size is None else self.args.max_speech_sample_size,
-                        min_keep_sample_size=self.args.min_speech_sample_size,
-                        normalize=self.args.normalize,
-                        store_labels=False,
-                        tgt_dict=self.dicts["text"],
-                        tokenizer=bpe_tokenizer,
-                    )
-                )
-                sample_ratios.append(sum([finetune_datasets[0].size(i) for i in range(len(finetune_datasets[0]))]))
-                
-                speech_label = f"{self.args.st_dir}/{st_split}.tsv"
-                text_label = [f"{self.args.st_dir}/{st_split}.txt"]
-                logger.info(f"ST directory: {speech_label}")
-                st_bpe = encoders.build_bpe(Namespace(**{"bpe": "sentencepiece", "sentencepiece_model": f"{self.args.st_dir}/spm_st.model"}))
-                # Hawau: Speech-to-text translation
-                finetune_datasets.append(
-                    SpeechToTextDataset(
-                        speech_label,
-                        sample_rate=self.args.sample_rate,
-                        label_paths=text_label,
-                        label_processors=[LabelEncoder(self.dicts["text"])],
-                        max_keep_sample_size=self.max_pos[0] if self.args.max_speech_sample_size is None else self.args.max_speech_sample_size,
-                        min_keep_sample_size=self.args.min_speech_sample_size,
-                        normalize=self.args.normalize,
-                        store_labels=False,
-                        tgt_dict=self.dicts["text"],
-                        tokenizer=st_bpe,
-                        language = '<de>',
-                        sub_task = '<translate>',
-                    )
-                )
-            
-                sample_ratios.append(sum([finetune_datasets[1].size(i) for i in range(len(finetune_datasets[1]))]))
-                # Text to speech
-                finetune_datasets.append(
-                    TextToSpeechDataset(
-                        manifest_path=f"{self.args.tts_dir}/{tts_split}.tsv",
-                        sample_rate=self.args.sample_rate,
-                        label_paths=[f"{self.args.tts_dir}/{tts_split}.txt"],
-                        label_processors=procs,
-                        max_keep_sample_size=self.max_pos[0],
-                        normalize=self.args.normalize,
-                        store_labels=False,
-                        src_dict=self.dicts["text"],
-                        tokenizer=bpe_tokenizer,
-                        reduction_factor=self.args.reduction_factor,
-                        inference=self.args.inference_speech,
-                    )
-                )
-                
-                sample_ratios.append(sum(finetune_datasets[2].sizes))
-                print(
-                    "Task: {0}, Loaded {1} samples of ASR speech-to-text_dataset".format(
-                        'multitask',
-                        len(finetune_datasets[0]),
-                    )
-                )
-                print(
-                    "Task: {0}, Loaded {1} samples of SpeechTranslation speech-to-text_dataset".format(
-                        'multitask',
-                        len(finetune_datasets[1]),
-                    )
-                )
-                print(
-                    "Task: {0}, Loaded {1} samples of first text_to_speech_dataset".format(
-                        'multitask',
-                        len(finetune_datasets[2]),
-                    )
-                )
-                if self.args.batch_ratio is not None:
-                    batch_ratio = eval(self.args.batch_ratio)
-                    assert len(batch_ratio) == len(sample_ratios)
-                    sample_ratios = [sample_ratios[i] / batch_ratio[i] for i in range(len(sample_ratios))]
-                else:
-                    batch_ratio = None
-                max_size = max(sample_ratios)
-                sample_ratios = [max_size / r for r in sample_ratios]
-                if hasattr(self.args, "sample_ratios") and self.args.sample_ratios is not None:
-                    sample_ratios = eval(self.args.sample_ratios)
-                # print(f"sample_ratios={sample_ratios}")
-                # print(f"batch_ratio={batch_ratio}")
-                if is_train_split:
-                    self.datasets[split] = MultitaskDataset(finetune_datasets)
-                else:
-                    self.datasets[split] = MultitaskDataset(finetune_datasets)
-
-        
-            
         elif self.t5_task == "pretrain":
             is_train_split = ("train" in split)
             pretrain_datasets = []
@@ -773,6 +549,7 @@ class ArTSTTask(LegacyFairseqTask):
         # Junyi: not use sample_size, but normalize the loss locally
         agg_loss, agg_sample_size, agg_logging_output = 0.0, 1.0, {}
         agg_logging_output['sample_size'] = 1
+
         def forward_backward(model, samples, weight=1.0):
             nonlocal agg_loss, agg_logging_output
             if samples is None or len(samples) == 0:
@@ -784,8 +561,6 @@ class ArTSTTask(LegacyFairseqTask):
                 loss *= weight
             loss = loss / sample_size
             optimizer.backward(loss)
-            # task_loss.append(f"{logging_output['task']}:{loss.detach().item()}")
-            # logger.info(f"Loss: {loss.detach().item()}")
             agg_loss += loss.detach().item()
             # # TODO make summing of the sample sizes configurable
             for k in logging_output:
@@ -797,15 +572,9 @@ class ArTSTTask(LegacyFairseqTask):
                 # agg_logging_output[k] += logging_output[k]
                 # agg_logging_output[task_name] += logging_output[k]
             agg_logging_output[samples['task_name']] = logging_output
-        
-        # logger.info(f"Number of Samples: {len(sample)} \
-        #     \nTask: {sample['task_name']}\
-        # ")
+
         forward_backward(model, sample)
-        # logger.info(f"Aggregated Loss: {agg_loss} - Aggregated Sample Size: {agg_sample_size} \nLogging Output{agg_logging_output}\
-        # ")
-        # breakpoint()
-        
+
         agg_logging_output["loss"] = agg_loss
 
         return agg_loss, agg_sample_size, agg_logging_output
@@ -849,7 +618,7 @@ class ArTSTTask(LegacyFairseqTask):
         args.label_rates = self.args.label_rates
         args.sample_rate = self.args.sample_rate
         self.args.reduction_factor = args.reduction_factor
-        return super(ArTSTTask, self).build_model(args)
+        return super(SpeechT5Task, self).build_model(args)
 
     def build_generator(
         self,
@@ -858,9 +627,10 @@ class ArTSTTask(LegacyFairseqTask):
         seq_gen_cls=None,
         extra_gen_cls_kwargs=None,
     ):
-        from artst.sequence_generator import SequenceGenerator
+        from speecht5.sequence_generator import SequenceGenerator
         extra_gen_cls_kwargs = {
             "ctc_weight": self.args.ctc_weight,
+            "lang": self.args.dialect,
             **extra_gen_cls_kwargs
         }
         return super().build_generator(

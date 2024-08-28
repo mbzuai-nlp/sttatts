@@ -1,0 +1,11 @@
+# logfiles
+**/logs
+
+# pycache
+*/__pycache__
+**/__pycache__
+
+# Compiled files
+*.pyc
+*.pyo
+*.pyd

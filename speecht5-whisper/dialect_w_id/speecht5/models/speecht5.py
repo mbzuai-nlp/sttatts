@@ -44,8 +44,8 @@ DEFAULT_MAX_TEXT_POSITIONS = 450
 DEFAULT_MAX_SPEECH_POSITIONS = 4000
 
 
-@register_model("artst_transformer")
-class ArTSTTransformerModel(FairseqEncoderDecoderModel):
+@register_model("t5_transformer")
+class T5TransformerModel(FairseqEncoderDecoderModel):
     """Adapted Transformer model (https://arxiv.org/abs/1706.03762) for
     speech-to-text tasks. The Transformer encoder/decoder remains the same.
     A trainable input subsampler is prepended to the Transformer encoder to
@@ -80,7 +80,6 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
 
         self.reduction_factor = args.reduction_factor
         self.spk_embed_dim = args.spk_embed_dim
-
         # define projection layer
         self.spk_embed_integration_type = args.spk_embed_integration_type
         if self.spk_embed_dim is not None and self.spk_embed_integration_type != 'pre':
@@ -90,8 +89,6 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
                 self.projection = torch.nn.Linear(
                     args.decoder_embed_dim + self.spk_embed_dim, args.decoder_embed_dim
                 )
-
-        # Hawau: here we can add language embedding integration
 
         self.use_codebook = args.use_codebook
         self.codebook_prob = getattr(args, "codebook_prob", 0.5) # args.codebook_prob
@@ -1244,8 +1241,7 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
                     outs = outs + self.speech_decoder_postnet.postnet(outs)  # (1, odim, L)
                 outs = outs.transpose(2, 1).squeeze(0)  # (L, odim)
                 probs = torch.cat(probs, dim=0)
-                # attn = torch.cat(attns, dim=2)
-                attn = None
+                attn = torch.cat(attns, dim=2)
                 break
 
         if outs.size(0) == maxlen:
@@ -1253,7 +1249,7 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
         return outs, probs, attn
 
 
-@register_model_architecture(model_name="artst_transformer", arch_name="artst_transformer")
+@register_model_architecture(model_name="t5_transformer", arch_name="t5_transformer")
 def base_architecture(args):
     # Transformer
     args.bert_init = getattr(args, "bert_init", False)
@@ -1386,8 +1382,8 @@ def base_architecture(args):
     args.encoder_max_relative_position = getattr(args, "encoder_max_relative_position", 160)
     args.decoder_max_relative_position = getattr(args, "decoder_max_relative_position", 160)
 
-@register_model_architecture("artst_transformer", "artst_transformer_base")
-def artst_transformer_base(args):
+@register_model_architecture("t5_transformer", "t5_transformer_base")
+def t5_transformer_base(args):
     args.use_conv_pos = getattr(args, "use_conv_pos", True)
     args.use_sinc_pos = getattr(args, "use_sinc_pos", True)
     args.layernorm_embedding = getattr(args, "layernorm_embedding", False)
@@ -1403,8 +1399,8 @@ def artst_transformer_base(args):
     args.mask_prob = getattr(args, "mask_prob", 0.80)
     base_architecture(args)
 
-@register_model_architecture("artst_transformer", "artst_transformer_large")
-def artst_transformer_large(args):
+@register_model_architecture("t5_transformer", "t5_transformer_large")
+def t5_transformer_large(args):
     args.use_conv_pos = getattr(args, "use_conv_pos", True)
     args.use_sinc_pos = getattr(args, "use_sinc_pos", True)
     args.encoder_normalize_before = getattr(args, "encoder_normalize_before", False)
@@ -1428,8 +1424,8 @@ def artst_transformer_large(args):
     args.mask_prob = getattr(args, "mask_prob", 0.80)
     base_architecture(args)
 
-@register_model_architecture("artst_transformer", "artst_transformer_base_asr")
-def artst_transformer_base_asr(args):
+@register_model_architecture("t5_transformer", "t5_transformer_base_asr")
+def t5_transformer_base_asr(args):
     args.use_conv_pos = getattr(args, "use_conv_pos", True)
     args.use_sinc_pos = getattr(args, "use_sinc_pos", True)
     args.encoder_normalize_before = getattr(args, "encoder_normalize_before", False)
