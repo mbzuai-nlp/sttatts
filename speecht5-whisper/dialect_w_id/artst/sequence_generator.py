@@ -1,8 +1,10 @@
 # --------------------------------------------------------
-# ArTST: Arabic Text and Speech Transformer (https://arxiv.org/abs/2310.16621)
-# Github source: https://github.com/mbzuai-nlp/ArTST
-# Based on speecht5, fairseq and espnet code bases
-# https://github.com/microsoft/SpeechT5/tree/main/SpeechT5; https://github.com/pytorch/fairseq; https://github.com/espnet/espnet
+# SpeechT5: Unified-Modal Encoder-Decoder Pre-Training for Spoken Language Processing (https://arxiv.org/abs/2110.07205)
+# Github source: https://github.com/microsoft/SpeechT5/tree/main/SpeechT5
+# Copyright (c) 2021 Microsoft
+# Licensed under The MIT License [see LICENSE for details]
+# Based on fairseq and espnet code bases
+# https://github.com/pytorch/fairseq; https://github.com/espnet/espnet
 # --------------------------------------------------------
 
 import math
@@ -16,11 +18,104 @@ from fairseq.data import data_utils
 from fairseq.models import FairseqIncrementalDecoder
 from torch import Tensor
 from fairseq.ngram_repeat_block import NGramRepeatBlock
-from espnet.nets.ctc_prefix_score import CTCPrefixScore
-import numpy
+# from espnet.nets.ctc_prefix_score import CTCPrefixScore
+import numpy 
+# import numpy as np
 
 CTC_SCORING_RATIO = 7.0
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+class CTCPrefixScore(object):
+    """Compute CTC label sequence scores
+
+    which is based on Algorithm 2 in WATANABE et al.
+    "HYBRID CTC/ATTENTION ARCHITECTURE FOR END-TO-END SPEECH RECOGNITION,"
+    but extended to efficiently compute the probablities of multiple labels
+    simultaneously
+    """
+
+    def __init__(self, x, blank, eos, xp):
+        self.xp = xp
+        self.logzero = -10000000000.0
+        self.blank = blank
+        self.eos = eos
+        self.input_length = len(x)
+        self.x = x
+
+    def initial_state(self):
+        """Obtain an initial CTC state
+
+        :return: CTC state
+        """
+        # initial CTC state is made of a frame x 2 tensor that corresponds to
+        # r_t^n(<sos>) and r_t^b(<sos>), where 0 and 1 of axis=1 represent
+        # superscripts n and b (non-blank and blank), respectively.
+        r = self.xp.full((self.input_length, 3), self.logzero, dtype=numpy.float32)
+        r[0, 2] = self.x[0, self.blank]
+        for i in range(2, self.input_length):
+            r[i, 1] = r[i - 1, 1] + self.x[i, self.blank]
+        return r
+
+    def __call__(self, y, cs, r_prev):
+        """Compute CTC prefix scores for next labels
+
+        :param y     : prefix label sequence
+        :param cs    : array of next labels
+        :param r_prev: previous CTC state
+        :return ctc_scores, ctc_states
+        """
+        # initialize CTC states
+        output_length = len(y) - 2  # ignore sos changed to 2 for ignore sos and lang
+        # new CTC states are prepared as a frame x (n or b) x n_labels tensor
+        # that corresponds to r_t^n(h) and r_t^b(h).
+        r = self.xp.ndarray((self.input_length, 2, len(cs)), dtype=numpy.float32)
+        xs = self.x[:, cs]
+        # breakpoint()
+        if output_length == 0:
+            r[0, 0] = xs[0]
+            r[0, 1] = self.logzero
+        else:
+            r[output_length - 1] = self.logzero
+
+        # prepare forward probabilities for the last label
+        r_sum = self.xp.logaddexp(
+            r_prev[:, 0], r_prev[:, 1]
+        )  # log(r_t^n(g) + r_t^b(g))
+        last = y[-1]
+        if output_length > 0 and last in cs:
+            log_phi = self.xp.ndarray((self.input_length, len(cs)), dtype=numpy.float32)
+            for i in range(len(cs)):
+                log_phi[:, i] = r_sum if cs[i] != last else r_prev[:, 1]
+        else:
+            log_phi = r_sum
+
+        # compute forward probabilities log(r_t^n(h)), log(r_t^b(h)),
+        # and log prefix probabilities log(psi)
+        start = max(output_length, 1)
+        log_psi = r[start - 1, 0]
+        for t in range(start, self.input_length):
+            r[t, 0] = self.xp.logaddexp(r[t - 1, 0], log_phi[t - 1]) + xs[t]
+            r[t, 1] = (
+                self.xp.logaddexp(r[t - 1, 0], r[t - 1, 1]) + self.x[t, self.blank]
+            )
+            log_psi = self.xp.logaddexp(log_psi, log_phi[t - 1] + xs[t])
+
+        # get P(...eos|X) that ends with the prefix itself
+        eos_pos = self.xp.where(cs == self.eos)[0]
+        if len(eos_pos) > 0:
+            log_psi[eos_pos] = r_sum[-1]  # log(r_T^n(g) + r_T^b(g))
+
+        # exclude blank probs
+        blank_pos = self.xp.where(cs == self.blank)[0]
+        if len(blank_pos) > 0:
+            log_psi[blank_pos] = self.logzero
+
+        # return the log prefix probability and CTC states, where the label axis
+        # of the CTC states is moved to the first axis to slice it easily
+        return log_psi, self.xp.rollaxis(r, 2)
+
+
 
 class SequenceGenerator(nn.Module):
     def __init__(
@@ -40,11 +135,13 @@ class SequenceGenerator(nn.Module):
         no_repeat_ngram_size=0,
         search_strategy=None,
         eos=None,
-        symbols_to_strip_from_output=None,
+        symbols_to_strip_from_output=set(["Palestine", 'Jordan', 'Lebanon', 'Kuwait', 'MSA', 'Tunisia', 
+       'Syria', 'Morocco', 'Egypt', 'SaudiArabia', 'UAE', 'Iraq',
+       'Multiple']),
         lm_model=None,
         lm_weight=1.0,
         ctc_weight=0.0,
-        prefix_language=None,
+        lang=None,
     ):
         """Generates translations of a given source sentence.
 
@@ -88,7 +185,14 @@ class SequenceGenerator(nn.Module):
                 self.mask_idxs.append(self.tgt_dict.index("<mask>" + str(count)))
                 count += 1
         self.mask_idxs = torch.tensor(self.mask_idxs)
-        self.prefix_tokens = torch.tensor(self.tgt_dict.index(prefix_language)) if prefix_language is not None else None
+        self.lang = lang
+        
+        self.lang_idx = tgt_dict.index(lang) if lang is not None else None
+        if self.lang is not None:
+            print(f"Forced generation for: {self.lang} with lang_idx: {self.lang_idx}")
+        else:
+            print("No lang specified, generating without dialect forcing")
+        symbols_to_strip_from_output = set([self.tgt_dict.dialect(x) for x in symbols_to_strip_from_output])
         self.symbols_to_strip_from_output = (
             symbols_to_strip_from_output.union({self.eos})
             if symbols_to_strip_from_output is not None
@@ -154,7 +258,12 @@ class SequenceGenerator(nn.Module):
             bos_token (int, optional): beginning of sentence token
                 (default: self.eos)
         """
-        return self._generate(sample, prefix_tokens=self.prefix_tokens, bos_token=bos_token)
+        if self.lang is not None:
+            print(f"Forced generation for: {lang} with lang_idx: {self.lang_idx}")
+            return self._generate(sample, **kwargs)
+        else:
+            print("No lang specified, generating without dialect forcing")
+            return self._generate_wo_forcing(sample, **kwargs)
 
     # TODO(myleott): unused, deprecate after pytorch-translate migration
     def generate_batched_itr(self, data_itr, beam_size=None, cuda=False, timer=None):
@@ -203,7 +312,10 @@ class SequenceGenerator(nn.Module):
             bos_token (int, optional): beginning of sentence token
                 (default: self.eos)
         """
-        return self._generate(sample, **kwargs)
+        if self.lang is not None:
+            return self._generate(sample, **kwargs)
+        else:
+            return self._generate_wo_forcing(sample, **kwargs)
 
     def _generate(
         self,
@@ -212,6 +324,471 @@ class SequenceGenerator(nn.Module):
         constraints: Optional[Tensor] = None,
         bos_token: Optional[int] = None,
     ):
+        # prefix_tokens = torch.tensor(self.lang_idx)
+        incremental_states = torch.jit.annotate(
+            List[Dict[str, Dict[str, Optional[Tensor]]]],
+            [
+                torch.jit.annotate(Dict[str, Dict[str, Optional[Tensor]]], {})
+                for i in range(self.model.models_size)
+            ],
+        )
+        net_input = sample["net_input"]
+        if "src_tokens" in net_input:
+            src_tokens = net_input["src_tokens"]
+            # length of the source text being the character length except EndOfSentence and pad
+            src_lengths = (
+                (src_tokens.ne(self.eos) & src_tokens.ne(self.pad)).long().sum(dim=1)
+            )
+        elif "source" in net_input:
+            src_tokens = net_input["source"]
+            src_lengths = (
+                net_input["padding_mask"].size(-1) - net_input["padding_mask"].sum(-1)
+                if net_input["padding_mask"] is not None
+                else torch.tensor(src_tokens.size(-1)).to(src_tokens)
+            )
+        elif "features" in net_input:
+            src_tokens = net_input["features"]
+            src_lengths = (
+                net_input["padding_mask"].size(-1) - net_input["padding_mask"].sum(-1)
+                if net_input["padding_mask"] is not None
+                else torch.tensor(src_tokens.size(-1)).to(src_tokens)
+            )
+        else:
+            raise Exception("expected src_tokens or source in net input. input keys: " + str(net_input.keys()))
+
+        # bsz: total number of sentences in beam
+        # Note that src_tokens may have more than 2 dimensions (i.e. audio features)
+        bsz, src_len = src_tokens.size()[:2]
+        beam_size = self.beam_size
+
+        if constraints is not None and not self.search.supports_constraints:
+            raise NotImplementedError(
+                "Target-side constraints were provided, but search method doesn't support them"
+            )
+
+        # Initialize constraints, when active
+        self.search.init_constraints(constraints, beam_size)
+
+        max_len: int = -1
+        if self.match_source_len:
+            max_len = src_lengths.max().item()
+        else:
+            max_len = min(
+                int(self.max_len_a * src_len + self.max_len_b),
+                self.max_len - 1,
+            )
+        assert (
+            self.min_len <= max_len
+        ), "min_len cannot be larger than max_len, please adjust these!"
+        
+        # breakpoint()
+        
+        # compute the encoder output for each beam
+        encoder_outs = self.model.forward_encoder(net_input)
+
+        # Get CTC lprobs and prep ctc_scorer
+        if self.ctc_weight > 0:
+            ctc_lprobs = self.model.models[0].get_normalized_probs_for_ctc(
+                encoder_outs[0], log_probs=True
+            ).contiguous().transpose(0, 1)  # (B, T, C) from the encoder
+
+            hyp = {}
+            ctc_prefix_score = CTCPrefixScore(ctc_lprobs[0].detach().cpu().numpy(), self.blank, self.eos, numpy)
+            
+            hyp["ctc_state_prev"] = ctc_prefix_score.initial_state()
+            hyp["ctc_score_prev"] = 0.0
+            ctc_beam = min(ctc_lprobs.shape[-1] - self.mask_idxs.size(-1), int(beam_size * CTC_SCORING_RATIO))
+            ctc_hyps = {str(self.eos) + " " + str(self.lang_idx): hyp}
+
+        # placeholder of indices for bsz * beam_size to hold tokens and accumulative scores
+        new_order = torch.arange(bsz).view(-1, 1).repeat(1, beam_size).view(-1)
+        new_order = new_order.to(src_tokens.device).long()
+        encoder_outs = self.model.reorder_encoder_out(encoder_outs, new_order)
+        # ensure encoder_outs is a List.
+        assert encoder_outs is not None
+
+        # initialize buffers
+        scores = (
+            torch.zeros(bsz * beam_size, max_len + 2).to(src_tokens).float()
+        )  # +1 for eos; pad is never chosen for scoring, change to +2 for eos,lang
+        tokens = (
+            torch.zeros(bsz * beam_size, max_len + 3)
+            .to(src_tokens)
+            .long()
+            .fill_(self.pad)
+        )  # +2 for eos and pad,  change to +3 for eos,lang
+        tokens[:, 0] = self.eos if bos_token is None else bos_token
+        tokens[:, 1] = self.lang_idx
+        
+        attn: Optional[Tensor] = None
+
+        # A list that indicates candidates that should be ignored.
+        # For example, suppose we're sampling and have already finalized 2/5
+        # samples. Then cands_to_ignore would mark 2 positions as being ignored,
+        # so that we only finalize the remaining 3 samples.
+        cands_to_ignore = (
+            torch.zeros(bsz, beam_size).to(src_tokens).eq(-1)
+        )  # forward and backward-compatible False mask
+
+        # list of completed sentences
+        finalized = torch.jit.annotate(
+            List[List[Dict[str, Tensor]]],
+            [torch.jit.annotate(List[Dict[str, Tensor]], []) for i in range(bsz)],
+        )  # contains lists of dictionaries of infomation about the hypothesis being finalized at each step
+
+        # a boolean array indicating if the sentence at the index is finished or not
+        finished = [False for i in range(bsz)]
+        num_remaining_sent = bsz  # number of sentences remaining
+
+        # number of candidate hypos per step
+        cand_size = 2 * beam_size  # 2 x beam size in case half are EOS
+
+        # offset arrays for converting between different indexing schemes
+        bbsz_offsets = (
+            (torch.arange(0, bsz) * beam_size)
+            .unsqueeze(1)
+            .type_as(tokens)
+            .to(src_tokens.device)
+        )
+        cand_offsets = torch.arange(0, cand_size).type_as(tokens).to(src_tokens.device)
+
+        reorder_state: Optional[Tensor] = None
+        ctc_state = None
+        batch_idxs: Optional[Tensor] = None
+
+        original_batch_idxs: Optional[Tensor] = None
+        if "id" in sample and isinstance(sample["id"], Tensor):
+            original_batch_idxs = sample["id"]
+        else:
+            original_batch_idxs = torch.arange(0, bsz).type_as(tokens)
+
+        for step in range(1,max_len + 2):  # one extra step for EOS marker, changed to 2 for lang, added 1 to start from lang
+            # print(f"Step: {step}")
+            # reorder decoder internal states based on the prev choice of beams
+            if reorder_state is not None:
+                if batch_idxs is not None:
+                    # update beam indices to take into account removed sentences
+                    corr = batch_idxs - torch.arange(batch_idxs.numel()).type_as(
+                        batch_idxs
+                    )
+                    reorder_state.view(-1, beam_size).add_(
+                        corr.unsqueeze(-1) * beam_size
+                    )
+                    original_batch_idxs = original_batch_idxs[batch_idxs]
+                self.model.reorder_incremental_state(incremental_states, reorder_state)
+                encoder_outs = self.model.reorder_encoder_out(
+                    encoder_outs, reorder_state
+                )
+            # breakpoint()
+            lprobs, avg_attn_scores = self.model.forward_decoder(
+                tokens[:, : step + 1],
+                encoder_outs,
+                incremental_states,
+                self.temperature,
+            )
+
+            if self.ctc_weight > 0 and step != 0:
+                # lprobs[:, self.blank] = -math.inf  # never select blank
+                ctc_lprobs = lprobs.clone()
+                ctc_lprobs[:, self.blank] = -math.inf # never select blank
+                if self.mask != self.unk:
+                    ctc_lprobs[:, self.mask] = -math.inf # never select mask
+                if self.mask_idxs.size(0) != 0:
+                    ctc_lprobs[:, self.mask_idxs] = -math.inf # never select mask
+                local_best_scores, local_best_ids = torch.topk(ctc_lprobs, ctc_beam, dim=-1)
+                for b in range(tokens.size(0)):
+                    
+                    hyp_key = " ".join(str(x) for x in tokens[b, : step + 1].tolist())
+                    # print(f"hyp_key: {hyp_key} for beam: {b}")
+                    try:
+                        ctc_scores, ctc_states = ctc_prefix_score(
+                            tokens[b, : step + 1].cpu(), local_best_ids[b].cpu(), ctc_hyps[hyp_key]["ctc_state_prev"]
+                        )
+                    except KeyError as e:
+                        print(f"ctc_hyps: {ctc_hyps.keys()}")
+                        print(f"hyp_key: {hyp_key}")
+                        print(f"step: {step}")
+                        raise KeyError
+                    lprobs[b] = lprobs[b]
+                    lprobs[b, local_best_ids[b]] = (1 - self.ctc_weight) * (lprobs[b, local_best_ids[b]]) + self.ctc_weight * torch.from_numpy(
+                            ctc_scores - ctc_hyps[hyp_key]["ctc_score_prev"]
+                        ).to(device=device)
+                    for j in range(len(local_best_ids[b])):
+                        ctc_hyps[hyp_key + " " + str(local_best_ids[b][j].item())] = {}
+                        ctc_hyps[hyp_key + " " + str(local_best_ids[b][j].item())]["ctc_score_prev"] = ctc_scores[j]
+                        ctc_hyps[hyp_key + " " + str(local_best_ids[b][j].item())]["ctc_state_prev"] = ctc_states[j]
+
+                # local_ctc_scores, ctc_state = ctc_scorer(
+                #     tokens[:, : step + 1], ctc_state, part_ids
+                # )
+                # lprobs += local_ctc_scores * self.ctc_weight
+            elif self.ctc_weight > 0 and step == 0:
+                ctc_lprobs = lprobs.clone()
+                ctc_lprobs[:, self.blank] = -math.inf # never select blank
+                if self.mask != self.unk:
+                    ctc_lprobs[:, self.mask] = -math.inf # never select mask
+                if self.mask_idxs.size(0) != 0:
+                    ctc_lprobs[:, self.mask_idxs] = -math.inf # never select mask
+                local_best_scores, local_best_ids = torch.topk(ctc_lprobs, ctc_beam, dim=-1)
+                for b in range(tokens.size(0)):
+                    hyp_key = " ".join(str(x) for x in tokens[b, : step + 1].tolist())
+                    ctc_scores, ctc_states = ctc_prefix_score(
+                        tokens[b, : step + 1].cpu(), local_best_ids[b].cpu(), ctc_hyps[hyp_key]["ctc_state_prev"]
+                    )
+                    lprobs[b] = lprobs[b]
+                    lprobs[b, local_best_ids[b]] = (1 - self.ctc_weight) * (lprobs[b, local_best_ids[b]]) + self.ctc_weight * torch.from_numpy(
+                            ctc_scores - ctc_hyps[hyp_key]["ctc_score_prev"]
+                        ).to(device=device)
+                    for j in range(len(local_best_ids[b])):
+                        if b == 0:
+                            ctc_hyps[hyp_key + " " + str(local_best_ids[b][j].item())] = {}
+                            ctc_hyps[hyp_key + " " + str(local_best_ids[b][j].item())]["ctc_score_prev"] = ctc_scores[j]
+                            ctc_hyps[hyp_key + " " + str(local_best_ids[b][j].item())]["ctc_state_prev"] = ctc_states[j]
+
+            if self.lm_model is not None:
+                lm_out = self.lm_model(tokens[:, : step + 1])
+                probs = self.lm_model.get_normalized_probs(
+                    lm_out, log_probs=True, sample=None
+                )
+                probs = probs[:, -1, :] * self.lm_weight
+                lprobs[:, :probs.size(1)] += probs
+
+            # handle prefix tokens (possibly with different lengths)
+            if (
+                prefix_tokens is not None
+                and step < prefix_tokens.size(1)
+                and step < max_len
+            ):
+                lprobs, tokens, scores = self._prefix_tokens(
+                    step, lprobs, scores, tokens, prefix_tokens, beam_size
+                )
+            elif step < self.min_len:
+                # minimum length constraint (does not apply if using prefix_tokens)
+                lprobs[:, self.eos] = -math.inf
+
+            lprobs[lprobs != lprobs] = torch.tensor(-math.inf).to(lprobs)
+
+            lprobs[:, self.pad] = -math.inf  # never select pad
+            lprobs[:, self.unk] -= self.unk_penalty  # apply unk penalty
+            lprobs[:, self.blank] = -math.inf # never select blank
+            if self.mask != self.unk:
+                lprobs[:, self.mask] = -math.inf # never select mask
+            if self.mask_idxs.size(0) != 0:
+                lprobs[:, self.mask_idxs] = -math.inf # never select mask
+
+            # handle max length constraint
+            if step >= max_len:
+                lprobs[:, : self.eos] = -math.inf
+                lprobs[:, self.eos + 1 :] = -math.inf
+
+            # Record attention scores, only support avg_attn_scores is a Tensor
+            if avg_attn_scores is not None:
+                if attn is None:
+                    attn = torch.empty(
+                        bsz * beam_size, avg_attn_scores.size(1), max_len + 2
+                    ).to(scores)
+                attn[:, :, step + 1].copy_(avg_attn_scores)
+
+            scores = scores.type_as(lprobs)
+            eos_bbsz_idx = torch.empty(0).to(
+                tokens
+            )  # indices of hypothesis ending with eos (finished sentences)
+            eos_scores = torch.empty(0).to(
+                scores
+            )  # scores of hypothesis ending with eos (finished sentences)
+
+            if self.should_set_src_lengths:
+                self.search.set_src_lengths(src_lengths)
+
+            if self.repeat_ngram_blocker is not None:
+                lprobs = self.repeat_ngram_blocker(tokens, lprobs, bsz, beam_size, step)
+
+            # Shape: (batch, cand_size)
+            cand_scores, cand_indices, cand_beams = self.search.step(
+                step,
+                lprobs.view(bsz, -1, self.vocab_size),
+                scores.view(bsz, beam_size, -1)[:, :, :step],
+                tokens[:, : step + 1],
+                original_batch_idxs,
+            )
+
+            # cand_bbsz_idx contains beam indices for the top candidate
+            # hypotheses, with a range of values: [0, bsz*beam_size),
+            # and dimensions: [bsz, cand_size]
+            cand_bbsz_idx = cand_beams.add(bbsz_offsets)
+
+            # finalize hypotheses that end in eos
+            # Shape of eos_mask: (batch size, beam size)
+            eos_mask = cand_indices.eq(self.eos) & cand_scores.ne(-math.inf)
+            eos_mask[:, :beam_size][cands_to_ignore] = torch.tensor(0).to(eos_mask)
+
+            # only consider eos when it's among the top beam_size indices
+            # Now we know what beam item(s) to finish
+            # Shape: 1d list of absolute-numbered
+            eos_bbsz_idx = torch.masked_select(
+                cand_bbsz_idx[:, :beam_size], mask=eos_mask[:, :beam_size]
+            )
+
+            finalized_sents: List[int] = []
+            if eos_bbsz_idx.numel() > 0:
+                eos_scores = torch.masked_select(
+                    cand_scores[:, :beam_size], mask=eos_mask[:, :beam_size]
+                )
+
+                finalized_sents = self.finalize_hypos(
+                    step,
+                    eos_bbsz_idx,
+                    eos_scores,
+                    tokens,
+                    scores,
+                    finalized,
+                    finished,
+                    beam_size,
+                    attn,
+                    src_lengths,
+                    max_len,
+                )
+                num_remaining_sent -= len(finalized_sents)
+
+            assert num_remaining_sent >= 0
+            if num_remaining_sent == 0:
+                break
+            if self.search.stop_on_max_len and step >= max_len:
+                break
+            assert step < max_len, f"{step} < {max_len}"
+
+            # Remove finalized sentences (ones for which {beam_size}
+            # finished hypotheses have been generated) from the batch.
+            if len(finalized_sents) > 0:
+                new_bsz = bsz - len(finalized_sents)
+
+                # construct batch_idxs which holds indices of batches to keep for the next pass
+                batch_mask = torch.ones(
+                    bsz, dtype=torch.bool, device=cand_indices.device
+                )
+                batch_mask[finalized_sents] = False
+                # TODO replace `nonzero(as_tuple=False)` after TorchScript supports it
+                batch_idxs = torch.arange(
+                    bsz, device=cand_indices.device
+                ).masked_select(batch_mask)
+
+                # Choose the subset of the hypothesized constraints that will continue
+                self.search.prune_sentences(batch_idxs)
+
+                eos_mask = eos_mask[batch_idxs]
+                cand_beams = cand_beams[batch_idxs]
+                bbsz_offsets.resize_(new_bsz, 1)
+                cand_bbsz_idx = cand_beams.add(bbsz_offsets)
+                cand_scores = cand_scores[batch_idxs]
+                cand_indices = cand_indices[batch_idxs]
+
+                if prefix_tokens is not None:
+                    prefix_tokens = prefix_tokens[batch_idxs]
+                src_lengths = src_lengths[batch_idxs]
+                cands_to_ignore = cands_to_ignore[batch_idxs]
+
+                scores = scores.view(bsz, -1)[batch_idxs].view(new_bsz * beam_size, -1)
+                tokens = tokens.view(bsz, -1)[batch_idxs].view(new_bsz * beam_size, -1)
+                if attn is not None:
+                    attn = attn.view(bsz, -1)[batch_idxs].view(
+                        new_bsz * beam_size, attn.size(1), -1
+                    )
+                bsz = new_bsz
+            else:
+                batch_idxs = None
+
+            # Set active_mask so that values > cand_size indicate eos hypos
+            # and values < cand_size indicate candidate active hypos.
+            # After, the min values per row are the top candidate active hypos
+
+            # Rewrite the operator since the element wise or is not supported in torchscript.
+
+            eos_mask[:, :beam_size] = ~((~cands_to_ignore) & (~eos_mask[:, :beam_size]))
+            active_mask = torch.add(
+                eos_mask.type_as(cand_offsets) * cand_size,
+                cand_offsets[: eos_mask.size(1)],
+            )
+
+            # get the top beam_size active hypotheses, which are just
+            # the hypos with the smallest values in active_mask.
+            # {active_hypos} indicates which {beam_size} hypotheses
+            # from the list of {2 * beam_size} candidates were
+            # selected. Shapes: (batch size, beam size)
+            new_cands_to_ignore, active_hypos = torch.topk(
+                active_mask, k=beam_size, dim=1, largest=False
+            )
+
+            # update cands_to_ignore to ignore any finalized hypos.
+            cands_to_ignore = new_cands_to_ignore.ge(cand_size)[:, :beam_size]
+            # Make sure there is at least one active item for each sentence in the batch.
+            assert (~cands_to_ignore).any(dim=1).all()
+
+            # update cands_to_ignore to ignore any finalized hypos
+
+            # {active_bbsz_idx} denotes which beam number is continued for each new hypothesis (a beam
+            # can be selected more than once).
+            active_bbsz_idx = torch.gather(cand_bbsz_idx, dim=1, index=active_hypos)
+            active_scores = torch.gather(cand_scores, dim=1, index=active_hypos)
+
+            active_bbsz_idx = active_bbsz_idx.view(-1)
+            active_scores = active_scores.view(-1)
+
+            # copy tokens and scores for active hypotheses
+
+            # Set the tokens for each beam (can select the same row more than once)
+            tokens[:, : step + 1] = torch.index_select(
+                tokens[:, : step + 1], dim=0, index=active_bbsz_idx
+            )
+            # Select the next token for each of them
+            tokens.view(bsz, beam_size, -1)[:, :, step + 1] = torch.gather(
+                cand_indices, dim=1, index=active_hypos
+            )
+            if step > 0:
+                scores[:, :step] = torch.index_select(
+                    scores[:, :step], dim=0, index=active_bbsz_idx
+                )
+            scores.view(bsz, beam_size, -1)[:, :, step] = torch.gather(
+                cand_scores, dim=1, index=active_hypos
+            )
+
+            # Update constraints based on which candidates were selected for the next beam
+            self.search.update_constraints(active_hypos)
+
+            # copy attention for active hypotheses
+            if attn is not None:
+                attn[:, :, : step + 2] = torch.index_select(
+                    attn[:, :, : step + 2], dim=0, index=active_bbsz_idx
+                )
+
+            # reorder incremental state in decoder
+            reorder_state = active_bbsz_idx
+
+            # if self.ctc_weight > 0:
+            #     accum_best_id = torch.gather(cand_indices, dim=1, index=active_hypos)
+            #     ctc_state = ctc_scorer.index_select_state(
+            #         ctc_state, accum_best_id
+            #     )
+
+        # sort by score descending
+        for sent in range(len(finalized)):
+            scores = torch.tensor(
+                [float(elem["score"].item()) for elem in finalized[sent]]
+            )
+            _, sorted_scores_indices = torch.sort(scores, descending=True)
+            finalized[sent] = [finalized[sent][ssi] for ssi in sorted_scores_indices]
+            finalized[sent] = torch.jit.annotate(
+                List[Dict[str, Tensor]], finalized[sent]
+            )
+        return finalized
+
+    def _generate_wo_forcing(
+        self,
+        sample: Dict[str, Dict[str, Tensor]],
+        prefix_tokens: Optional[Tensor] = None,
+        constraints: Optional[Tensor] = None,
+        bos_token: Optional[int] = None,
+    ):
+        from espnet.nets.ctc_prefix_score import CTCPrefixScore
         incremental_states = torch.jit.annotate(
             List[Dict[str, Dict[str, Optional[Tensor]]]],
             [
@@ -289,7 +866,7 @@ class SequenceGenerator(nn.Module):
         new_order = new_order.to(src_tokens.device).long()
         encoder_outs = self.model.reorder_encoder_out(encoder_outs, new_order)
         # ensure encoder_outs is a List.
-        assert encoder_outs is not None
+        assert encoder_outs is not None, "encoder_outs should be a List"
 
         # initialize buffers
         scores = (
@@ -380,9 +957,17 @@ class SequenceGenerator(nn.Module):
                 for b in range(tokens.size(0)):
                     hyp_key = " ".join(str(x) for x in tokens[b, : step + 1].tolist())
                     
-                    ctc_scores, ctc_states = ctc_prefix_score(
-                        tokens[b, : step + 1].cpu(), local_best_ids[b].cpu(), ctc_hyps[hyp_key]["ctc_state_prev"]
-                    )
+                    try:
+                        ctc_scores, ctc_states = ctc_prefix_score(
+                            tokens[b, : step + 1].cpu(), local_best_ids[b].cpu(), ctc_hyps[hyp_key]["ctc_state_prev"]
+                        )
+                    except KeyError as e:
+                        # print(f"ctc_hyps: {ctc_hyps.keys()}")
+                        print(f"hyp_key: {hyp_key}")
+                        print(f"step: {step}")
+                        print(f"b: {b}")
+                        print(e)
+                        raise KeyError
                     lprobs[b] = lprobs[b]
                     lprobs[b, local_best_ids[b]] = (1 - self.ctc_weight) * (lprobs[b, local_best_ids[b]]) + self.ctc_weight * torch.from_numpy(
                             ctc_scores - ctc_hyps[hyp_key]["ctc_score_prev"]

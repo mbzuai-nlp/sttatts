@@ -71,7 +71,7 @@ class SpeechT5Task(LegacyFairseqTask):
         )
         parser.add_argument(
             "--dialect",
-            default="Egypt",
+            default=None,
             type=str,
             help="dialect for the task",
         )

@@ -68,6 +68,12 @@ class ArTSTTask(LegacyFairseqTask):
             help="max speech sample size",
         )
         parser.add_argument(
+            "--dialect",
+            default=None,
+            type=str,
+            help="dialect for the task",
+        )
+        parser.add_argument(
             "--min-speech-sample-size",
             default=None,
             type=int,
@@ -631,6 +637,7 @@ class ArTSTTask(LegacyFairseqTask):
         from artst.sequence_generator import SequenceGenerator
         extra_gen_cls_kwargs = {
             "ctc_weight": self.args.ctc_weight,
+            "lang": self.args.dialect,
             **extra_gen_cls_kwargs
         }
         return super().build_generator(

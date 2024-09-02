@@ -147,7 +147,7 @@ class SpeechToTextDataset(FairseqDataset):
 
                 
         if self.tokenizer is not None:
-            label = f"{self.language} {self.sub_task} " + self.tokenizer.encode(label)
+            label = self.tokenizer.encode(label)
 
         if self.label_processors is not None:
             label = self.label_processors[label_idx](label)

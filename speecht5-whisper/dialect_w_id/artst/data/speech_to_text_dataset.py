@@ -31,7 +31,7 @@ def load_audio(manifest_path, max_keep, min_keep):
         root = f.readline().strip()
         for ind, line in enumerate(f):
             items = line.strip().split("\t")
-            assert len(items) >= 3, line
+            # assert len(items) >= 3, line
             sz = int(items[1])
             if min_keep is not None and sz < min_keep:
                 n_short += 1
@@ -42,7 +42,7 @@ def load_audio(manifest_path, max_keep, min_keep):
                 names.append(items[0])
                 inds.append(ind)
                 sizes.append(sz)
-                dialects.append(items[2])
+                dialects.append(items[2] if len(items) > 2 else "")
     tot = ind + 1
     logger.info(
         (
