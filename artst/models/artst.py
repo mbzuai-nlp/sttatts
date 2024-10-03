@@ -65,6 +65,9 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
 
         self.encoder = encoder
         self.decoder = decoder
+        
+        self.task_id = {'s2t': 1, 't2s': 2}
+        self.task_embed_dim = 128
 
         self.text_encoder_prenet = text_encoder_prenet
         self.speech_encoder_prenet = speech_encoder_prenet
@@ -81,6 +84,7 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
         self.reduction_factor = args.reduction_factor
         self.spk_embed_dim = args.spk_embed_dim
 
+        self.projection_task = torch.nn.Linear(args.encoder_embed_dim + self.task_embed_dim, args.encoder_embed_dim)
         # define projection layer
         self.spk_embed_integration_type = args.spk_embed_integration_type
         if self.spk_embed_dim is not None and self.spk_embed_integration_type != 'pre':
@@ -794,6 +798,10 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
         """
         assert source is not None or src_tokens is not None
         # padding_mask is not none only when input is waveform
+        
+        if task_name is not None:
+            task_id = self.task_id[task_name]
+                
         if source is None and padding_mask is None and not feature_only:
             input_type = 'text'
         else:
@@ -829,7 +837,9 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
                 if getattr(self.args, "sid_encoder_cls", None) == "encoder":
                     prev_output_tokens = torch.zeros_like(prev_output_tokens)
                     encoder_input, encoder_padding_mask = self._integrate_with_speaker_cls(prev_output_tokens, encoder_input, encoder_padding_mask)
-
+        
+        
+        
         # Encoder: T x B x C
         encoder_output = self.encoder(encoder_input, encoder_padding_mask, tgt_layer=tgt_enc_layer)
 
@@ -858,32 +868,6 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
             # Change the encoder output to decoder input once set unb-enc-layer
             encoder_output["encoder_out"] = encoder_output["decoder_input"]
 
-        if self.use_codebook:
-            q = self.quantizer(encoder_output["encoder_out"][0].transpose(0, 1))
-
-            # q["x"]: B x T x C
-            # Sample indexs according to the codebook prob
-            random_idx = torch.randperm(q["x"].size(1))[:int(q["x"].size(1) * self.codebook_prob)]
-            # Make weight for q
-            q_w = q["x"].new_zeros(q["x"].size(1))
-            q_w[random_idx] = 1.0
-            # Combine quantized codes and encoder output
-            encoder_output["encoder_out"][0] = (
-                q_w.view(-1, 1) * q["x"] + (- q_w + 1).view(-1, 1) * encoder_output["encoder_out"][0].transpose(0, 1)
-            ).transpose(0, 1)
-
-            # encoder_output["encoder_out"][0] = q["x"].transpose(0, 1)
-            if output_type == 'speech':
-                hubert_results["prob_perplexity"] = q["prob_perplexity"]
-                hubert_results["code_perplexity"] = q["code_perplexity"]
-                hubert_results["num_vars"] = q["num_vars"]
-                hubert_results["temp"] = q["temp"]
-            elif output_type == 'text':
-                codebook_out["prob_perplexity"] = q["prob_perplexity"]
-                codebook_out["code_perplexity"] = q["code_perplexity"]
-                codebook_out["num_vars"] = q["num_vars"]
-                codebook_out["temp"] = q["temp"]
-
         if only_hubert and target_list is not None:
             return hubert_results, None
         
@@ -911,14 +895,13 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
 
                 prev_output_tokens, tgt_mask = self.speech_decoder_prenet(prev_output_tokens, tgt_lengths)
 
-        # BART Sequence Classification: cat <pad> + feature before decoder
-        if task_name is not None and task_name == 's2c' and self.args.sid_pooling_layer == "decoder-las":
-            decoder_feat_input, decoder_feat_mask = self.speech_decoder_prenet(src_tokens, src_lengths)
-            prev_output_tokens, tgt_mask = self._integrate_with_speaker_cls((prev_output_tokens, tgt_mask), decoder_feat_input, decoder_feat_mask, cls_first=False)
-        
-        # SE predict masking to corresponding inputs and source speech replaces the prev_output_tokens as the input of decoder
-        if task_name is not None and task_name == "s2s" and getattr(self.args, "se_decoder_input", "previous_target") == "source":
-            prev_output_tokens, tgt_mask = self.speech_decoder_prenet(src_tokens, src_lengths)
+        # Hawau - add task Id to decoder input
+        if task_name is not None:
+            # encoder_input = self._integrate_with_task_id(encoder_input, task_id)
+            # encoder_input = encoder_input.float()
+            encoder_output["encoder_out"] = [self._integrate_with_task_id(
+                        encoder_output["encoder_out"][0].transpose(0, 1), task_id
+                    ).transpose(0, 1)]
 
         # Decoder
         decoder_output, extra = self.decoder(prev_output_tokens, tgt_mask, encoder_output, 
@@ -1021,7 +1004,19 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
             raise NotImplementedError("support only add or concat.")
 
         return hs
-
+    def _integrate_with_task_id(self, hs, task_id):
+        """Integrate speaker embedding with hidden states.
+        Args:
+            hs (Tensor): Batch of hidden state sequences (B, seq_len, adim).
+            task_emb (int): task_id .
+        Returns:
+            Tensor: Batch of integrated hidden state sequences (B, seq_len+1, adim)
+        """
+        task_emb = F.normalize(torch.randn(1,self.task_embed_dim, generator=torch.Generator().manual_seed(task_id))).to(hs.device).expand(hs.size(0),hs.size(1),-1).to(dtype=hs.dtype)
+        hs = self.projection_task(torch.cat([task_emb, hs], dim=-1))
+        assert hs.size(2) == 768 , f"hs.size(2) = {hs.size(2)}"
+        return hs
+        
     def load_state_dict(
         self,
         state_dict,
@@ -1038,14 +1033,14 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
         # self.prune_modules(model_cfg.modules_filter)
         model_dict_size = self.text_decoder_postnet.output_projection.out_features
         ckpt_dict_size = state_dict["text_decoder_postnet.output_projection.weight"].size(0)
-        if model_dict_size != ckpt_dict_size and getattr(args, "arch", "artst_transformer_large"):
+        if model_dict_size != ckpt_dict_size:
             # reset dictionary-related modules, such as embedding table and encoder ctc embed
             logger.warn(f"not equal dictionary between model and checkpoint: {model_dict_size} vs {ckpt_dict_size}")
             logger.info(f"reset model dictionary with size of {model_dict_size}")
             removed_keys = [
                 key for key in state_dict.keys() if any(
                     key.startswith(previ) for previ in [
-                        "encoder.proj", "text_encoder_prenet", "text_decoder_prenet", "text_decoder_postnet", "speech_decoder_prenet.spkembs_layer"
+                        "encoder.proj", "text_encoder_prenet", "text_decoder_prenet", "text_decoder_postnet"
                     ]
                 )
             ]
@@ -1136,18 +1131,30 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
     def forward_encoder(self, source, padding_mask=None):
         # Encoder Prenet
         encoder_input, encoder_padding_mask = self.speech_encoder_prenet(source, padding_mask=padding_mask, mask=False)
-
+        
+        
         # Encoder
         encoder_output = self.encoder(encoder_input, encoder_padding_mask)
-
+        
+        # ADD task_id to encoder_input
+        # encoder_output = self._integrate_with_task_id(encoder_input, self.task_id["s2t"])
+        encoder_output["encoder_out"] = [self._integrate_with_task_id(
+                        encoder_output["encoder_out"][0].transpose(0, 1), self.task_id["s2t"]
+                    ).transpose(0, 1)]
         return encoder_output
 
     def forward_text_encoder(self, src_tokens):
         # Text Encoder Prenet
         encoder_input, encoder_padding_mask = self.text_encoder_prenet(src_tokens)
-
+        
         # Encoder
         encoder_output = self.encoder(encoder_input, encoder_padding_mask)
+        
+        # ADD task_id to encoder_input
+        # encoder_output = self._integrate_with_task_id(encoder_input, self.task_id["t2s"])
+        encoder_output["encoder_out"] = [self._integrate_with_task_id(
+                        encoder_output["encoder_out"][0].transpose(0, 1), self.task_id["t2s"]
+                    ).transpose(0, 1)]
 
         return encoder_output
 
@@ -1190,7 +1197,7 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
 
     def generate_speech(self, source=None, src_tokens=None, spkembs=None, **kwargs):
         assert source is not None or src_tokens is not None
-
+        
         threshold = kwargs.get("threshold", 0.5)
         minlenratio = kwargs.get("threshold", 0.0)
 
@@ -1245,7 +1252,7 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
                 outs = outs.transpose(2, 1).squeeze(0)  # (L, odim)
                 probs = torch.cat(probs, dim=0)
                 # attn = torch.cat(attns, dim=2)
-                attn = None
+                attn =None #Hawau: added this because of a funny error
                 break
 
         if outs.size(0) == maxlen:

@@ -1038,14 +1038,14 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
         # self.prune_modules(model_cfg.modules_filter)
         model_dict_size = self.text_decoder_postnet.output_projection.out_features
         ckpt_dict_size = state_dict["text_decoder_postnet.output_projection.weight"].size(0)
-        if model_dict_size != ckpt_dict_size and getattr(args, "arch", "artst_transformer_large"):
+        if model_dict_size != ckpt_dict_size:
             # reset dictionary-related modules, such as embedding table and encoder ctc embed
             logger.warn(f"not equal dictionary between model and checkpoint: {model_dict_size} vs {ckpt_dict_size}")
             logger.info(f"reset model dictionary with size of {model_dict_size}")
             removed_keys = [
                 key for key in state_dict.keys() if any(
                     key.startswith(previ) for previ in [
-                        "encoder.proj", "text_encoder_prenet", "text_decoder_prenet", "text_decoder_postnet", "speech_decoder_prenet.spkembs_layer"
+                        "encoder.proj", "text_encoder_prenet", "text_decoder_prenet", "text_decoder_postnet"
                     ]
                 )
             ]
@@ -1244,8 +1244,7 @@ class ArTSTTransformerModel(FairseqEncoderDecoderModel):
                     outs = outs + self.speech_decoder_postnet.postnet(outs)  # (1, odim, L)
                 outs = outs.transpose(2, 1).squeeze(0)  # (L, odim)
                 probs = torch.cat(probs, dim=0)
-                # attn = torch.cat(attns, dim=2)
-                attn = None
+                attn = torch.cat(attns, dim=2)
                 break
 
         if outs.size(0) == maxlen:
