@@ -10,6 +10,7 @@
 *.pyo
 *.pyd
 
+# other files
 speecht5-whisper/
 t5/
 t5-3tasks/
