@@ -22,7 +22,7 @@ This repository contains the implementation of the paper:
 
 ### Checkpoints
 
-Finetuned checkpoints are available for [Arabic]() and [English-small](https://huggingface.co/MBZUAI/STTATTS/blob/main/checkpoint_en_small.pt). To finetune on your dataset, download pretrained checkpoints,tokenizer and dict from [ArTST](https://github.com/mbzuai-nlp/ArTST/) and [SpeechT5](https://github.com/microsoft/SpeechT5/tree/main/SpeechT5).
+Finetuned checkpoints are available for [Arabic](https://huggingface.co/MBZUAI/STTATTS/blob/main/checkpoint_ar_wo_d.pt) and [English-small](https://huggingface.co/MBZUAI/STTATTS/blob/main/checkpoint_en_small.pt). To finetune on your dataset, download pretrained checkpoints,tokenizer and dict from [ArTST](https://github.com/mbzuai-nlp/ArTST/) and [SpeechT5](https://github.com/microsoft/SpeechT5/tree/main/SpeechT5).
 
 
 ### Finetune, Installation and Inference
